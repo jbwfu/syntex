@@ -15,12 +15,14 @@ var (
 	noGitignore     bool
 	excludePatterns []string
 	includePatterns []string
+	outputFormat    string
 )
 
 func main() {
 	pflag.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
 	pflag.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories. Can be used multiple times.")
 	pflag.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths. Can be used multiple times.")
+	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (e.g., markdown, md).") // New flag definition
 
 	pflag.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -32,7 +34,6 @@ func main() {
 
 	targets := pflag.Args()
 	if len(targets) == 0 && len(includePatterns) > 0 {
-		// If no positional args are given, but --include is, treat them as targets.
 		targets = includePatterns
 	}
 
@@ -41,8 +42,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Determine project root. If targets came from flags, base it on the current directory.
-	// Otherwise, base it on the first positional argument.
 	rootDiscoveryPath := "."
 	if pflag.NArg() > 0 {
 		rootDiscoveryPath = targets[0]
@@ -65,14 +64,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	formatter := packer.NewMarkdownFormatter()
+	// Use the factory to create the formatter based on the flag value.
+	formatter, err := packer.NewFormatter(outputFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	p := packer.NewPacker(formatter, os.Stdout, filterManager, projectRoot)
 
 	for _, target := range targets {
 		absTargetPath, err := filepath.Abs(target)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: invalid path %s: %v\n", target, err)
-			continue // Process next target
+			continue
 		}
 		if err := p.ProcessPath(absTargetPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error processing %s: %v\n", target, err)
