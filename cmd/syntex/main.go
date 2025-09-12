@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +16,11 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	err := run(os.Args[1:], os.Stdout, os.Stderr)
+	if err != nil {
+		if errors.Is(err, pflag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -39,8 +44,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
-		fmt.Fprintf(stderr, "Usage: %s [flags] [directory_or_file...]\n", progName)
-		fmt.Fprintf(stderr, "\nFlags:\n")
+		fmt.Fprintf(stderr, "Usage: %s [flags] [path_or_glob...]\n", progName)
+		fmt.Fprintf(stderr, "\nOptions:\n")
 		fs.PrintDefaults()
 	}
 
@@ -55,7 +60,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	if len(targets) == 0 {
 		fs.Usage()
-		return fmt.Errorf("no target paths provided")
+		return fmt.Errorf("no target paths or globs provided")
 	}
 
 	rootDiscoveryPath := "."
