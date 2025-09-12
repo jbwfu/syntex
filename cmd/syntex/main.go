@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/jbwfu/syntex/internal/filter"
+	"github.com/jbwfu/syntex/internal/language"
 	"github.com/jbwfu/syntex/internal/packer"
 	"github.com/jbwfu/syntex/internal/project"
 	"github.com/spf13/pflag"
@@ -22,7 +23,7 @@ func main() {
 	pflag.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
 	pflag.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories. Can be used multiple times.")
 	pflag.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths. Can be used multiple times.")
-	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).") // Updated help text
+	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
 
 	pflag.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -57,7 +58,6 @@ func main() {
 		ExcludePatterns:  excludePatterns,
 		IncludePatterns:  includePatterns,
 	}
-
 	filterManager, err := filter.NewManager(projectRoot, filterOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing filter manager: %v\n", err)
@@ -70,16 +70,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := packer.NewPacker(formatter, os.Stdout, filterManager, projectRoot)
+	languageDetector := language.NewDetector()
 
+	p := packer.NewPacker(formatter, os.Stdout, filterManager, languageDetector, projectRoot)
+
+	var absTargets []string
 	for _, target := range targets {
-		absTargetPath, err := filepath.Abs(target)
+		abs, err := filepath.Abs(target)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: invalid path %s: %v\n", target, err)
 			continue
 		}
-		if err := p.ProcessPath(absTargetPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing %s: %v\n", target, err)
-		}
+		absTargets = append(absTargets, abs)
+	}
+
+	plan, err := p.Plan(absTargets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error during planning phase: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := p.Execute(plan); err != nil {
+		fmt.Fprintf(os.Stderr, "Error during execution phase: %v\n", err)
+		os.Exit(1)
 	}
 }
