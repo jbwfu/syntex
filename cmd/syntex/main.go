@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -12,45 +13,55 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var (
-	noGitignore     bool
-	excludePatterns []string
-	includePatterns []string
-	outputFormat    string
-)
-
 func main() {
-	pflag.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
-	pflag.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories. Can be used multiple times.")
-	pflag.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths. Can be used multiple times.")
-	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
-
-	pflag.Usage = func() {
-		progName := filepath.Base(os.Args[0])
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] [directory_or_file...]\n", progName)
-		fmt.Fprintf(os.Stderr, "\nFlags:\n")
-		pflag.PrintDefaults()
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	pflag.Parse()
+}
 
-	targets := pflag.Args()
+func run(args []string, stdout, stderr io.Writer) error {
+	fs := pflag.NewFlagSet("syntex", pflag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var noGitignore bool
+	var excludePatterns []string
+	var includePatterns []string
+	var outputFormat string
+
+	fs.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
+	fs.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories. Can be used multiple times.")
+	fs.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths. Can be used multiple times.")
+	fs.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
+
+	fs.Usage = func() {
+		progName := filepath.Base(os.Args[0])
+		fmt.Fprintf(stderr, "Usage: %s [flags] [directory_or_file...]\n", progName)
+		fmt.Fprintf(stderr, "\nFlags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	targets := fs.Args()
 	if len(targets) == 0 && len(includePatterns) > 0 {
 		targets = includePatterns
 	}
 
 	if len(targets) == 0 {
-		pflag.Usage()
-		os.Exit(1)
+		fs.Usage()
+		return fmt.Errorf("no target paths provided")
 	}
 
 	rootDiscoveryPath := "."
-	if pflag.NArg() > 0 {
+	if fs.NArg() > 0 {
 		rootDiscoveryPath = targets[0]
 	}
 	projectRoot, err := project.FindRoot(rootDiscoveryPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to determine project root: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to determine project root: %w", err)
 	}
 
 	filterOpts := filter.Options{
@@ -60,38 +71,35 @@ func main() {
 	}
 	filterManager, err := filter.NewManager(projectRoot, filterOpts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing filter manager: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize filter manager: %w", err)
 	}
 
 	formatter, err := packer.NewFormatter(outputFormat)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	languageDetector := language.NewDetector()
 
-	p := packer.NewPacker(formatter, os.Stdout, filterManager, languageDetector, projectRoot)
+	p := packer.NewPacker(formatter, stdout, filterManager, languageDetector, projectRoot)
 
 	var absTargets []string
 	for _, target := range targets {
 		abs, err := filepath.Abs(target)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: invalid path %s: %v\n", target, err)
-			continue
+			return fmt.Errorf("invalid path %q: %w", target, err)
 		}
 		absTargets = append(absTargets, abs)
 	}
 
 	plan, err := p.Plan(absTargets)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error during planning phase: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("planning phase failed: %w", err)
 	}
 
 	if err := p.Execute(plan); err != nil {
-		fmt.Fprintf(os.Stderr, "Error during execution phase: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("execution phase failed: %w", err)
 	}
+
+	return nil
 }
