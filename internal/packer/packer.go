@@ -6,11 +6,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
+	"sort"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
 )
+
+// PlannedFile holds pre-calculated information for a file to be processed.
+type PlannedFile struct {
+	Path     string
+	Language string
+}
 
 // Packer handles the logic of processing files and directories.
 type Packer struct {
@@ -38,106 +45,115 @@ func NewPacker(
 	}
 }
 
-// Plan discovers and filters all files from the given target paths,
-// returning a list of absolute file paths to be processed.
-func (p *Packer) Plan(targets []string) ([]string, error) {
-	var plan []string
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+// Plan discovers and filters files based on include patterns and target paths.
+func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
+	planFiles := make(map[string]PlannedFile)
 
-	for _, target := range targets {
-		wg.Add(1)
-		go func(t string) {
-			defer wg.Done()
-			var files []string
-			info, err := os.Stat(t)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: cannot access path %s: %v\n", t, err)
-				return
-			}
+	p.processIncludes(planFiles)
+	p.processTargets(targets, planFiles)
 
-			if info.IsDir() {
-				files, err = p.planDirectory(t)
-			} else {
-				files, err = p.planFile(t)
-			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: error planning path %s: %v\n", t, err)
-				return
-			}
-			mu.Lock()
-			plan = append(plan, files...)
-			mu.Unlock()
-		}(target)
+	result := make([]PlannedFile, 0, len(planFiles))
+	for _, pf := range planFiles {
+		result = append(result, pf)
 	}
 
-	wg.Wait()
-	return plan, nil
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Path < result[j].Path
+	})
+
+	return result, nil
 }
 
-func (p *Packer) planDirectory(rootTarget string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(rootTarget, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+func (p *Packer) processIncludes(plan map[string]PlannedFile) {
+	for _, pattern := range p.filter.GetIncludePatterns() {
+		matches, _ := doublestar.Glob(os.DirFS("."), pattern)
+		for _, match := range matches {
+			if info, err := os.Stat(match); err == nil && !info.IsDir() {
+				plan[match] = PlannedFile{
+					Path:     match,
+					Language: p.detector.GetLanguage(match),
+				}
+			}
 		}
+	}
+}
 
-		relPath, err := filepath.Rel(p.rootPath, path)
+func (p *Packer) processTargets(targets []string, plan map[string]PlannedFile) {
+	for _, target := range targets {
+		info, err := os.Stat(target)
+		if err == nil && info.IsDir() {
+			p.walkDirectory(target, plan)
+		} else {
+			matches, _ := doublestar.Glob(os.DirFS("."), target)
+			for _, match := range matches {
+				p.addFileIfValid(match, plan)
+			}
+		}
+	}
+}
+
+func (p *Packer) walkDirectory(dir string, plan map[string]PlannedFile) {
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-
-		if p.filter != nil && relPath != "." {
-			if p.filter.IsIgnored(relPath, d.IsDir()) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
+		if d.IsDir() {
+			absPath, err := filepath.Abs(path)
+			if err != nil {
 				return nil
 			}
-		}
-
-		if !d.IsDir() {
-			files = append(files, path)
+			relPath, err := filepath.Rel(p.rootPath, absPath)
+			if err != nil {
+				return nil
+			}
+			if p.filter.IsExcluded(relPath, true) {
+				return filepath.SkipDir
+			}
+		} else {
+			p.addFileIfValid(path, plan)
 		}
 		return nil
 	})
-	return files, err
 }
 
-func (p *Packer) planFile(filePath string) ([]string, error) {
-	relPath, err := filepath.Rel(p.rootPath, filePath)
-	if err != nil {
-		return nil, nil
+func (p *Packer) addFileIfValid(path string, plan map[string]PlannedFile) {
+	if _, exists := plan[path]; exists {
+		return
 	}
 
-	info, err := os.Stat(filePath)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return
+	}
+	relPath, err := filepath.Rel(p.rootPath, absPath)
+	if err != nil {
+		return
 	}
 
-	if p.filter != nil && p.filter.IsIgnored(relPath, info.IsDir()) {
-		return nil, nil
+	if !p.filter.IsExcluded(relPath, false) {
+		plan[path] = PlannedFile{
+			Path:     path,
+			Language: p.detector.GetLanguage(path),
+		}
 	}
-	return []string{filePath}, nil
 }
 
-// Execute processes a list of file paths (the plan), formats them, and writes to output.
-func (p *Packer) Execute(plan []string) error {
-	for _, filePath := range plan {
-		content, err := os.ReadFile(filePath)
+// Execute processes a list of PlannedFile items, formats them, and writes to output.
+func (p *Packer) Execute(plan []PlannedFile) error {
+	for _, file := range plan {
+		content, err := os.ReadFile(file.Path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping file %s: %v\n", filePath, err)
+			fmt.Fprintf(os.Stderr, "warning: skipping file %s: %v\n", file.Path, err)
 			continue
 		}
 
-		lang := p.detector.GetLanguage(filePath)
-		formatted, err := p.formatter.Format(filePath, lang, content)
+		formatted, err := p.formatter.Format(file.Path, file.Language, content)
 		if err != nil {
-			return fmt.Errorf("formatting file %s: %w", filePath, err)
+			return fmt.Errorf("formatting file %s: %w", file.Path, err)
 		}
 
 		if _, err := p.output.Write(formatted); err != nil {
-			return fmt.Errorf("writing to output for file %s: %w", filePath, err)
+			return fmt.Errorf("writing to output for file %s: %w", file.Path, err)
 		}
 	}
 	return nil

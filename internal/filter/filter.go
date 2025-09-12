@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -9,16 +10,11 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
-// Filter defines the interface for any path filtering logic.
-type Filter interface {
-	IsIgnored(path string, isDir bool) bool
-}
-
 type gitignoreFilter struct {
 	matcher gitignore.Matcher
 }
 
-func newGitignoreFilter(rootPath string) (Filter, error) {
+func newGitignoreFilter(rootPath string) (*gitignoreFilter, error) {
 	fs := osfs.New(rootPath)
 	patterns, err := gitignore.ReadPatterns(fs, nil)
 	if err != nil {
@@ -33,11 +29,11 @@ func (f *gitignoreFilter) IsIgnored(path string, isDir bool) bool {
 	return f.matcher.Match(components, isDir)
 }
 
-// Manager orchestrates multiple filters according to predefined precedence.
+// Manager orchestrates filtering logic.
 type Manager struct {
 	includePatterns []string
 	excludePatterns []string
-	gitignoreFilter Filter
+	gitignoreFilter *gitignoreFilter
 }
 
 // Options configures the behavior of the filter Manager.
@@ -61,22 +57,26 @@ func NewManager(rootPath string, opts Options) (*Manager, error) {
 			return nil, err
 		}
 	}
-
 	return m, nil
 }
 
-// IsIgnored checks the path against all configured filters with correct precedence.
-// Precedence: Inclusion > Exclusion > Gitignore
-func (m *Manager) IsIgnored(path string, isDir bool) bool {
-	// doublestar expects OS-specific separators for matching.
-	osPath := filepath.FromSlash(path)
-
-	for _, pattern := range m.includePatterns {
-		if match, _ := doublestar.Match(pattern, osPath); match {
-			return false
+// GetIncludePatterns returns the configured include patterns, expanding directory
+// paths to match all contents.
+func (m *Manager) GetIncludePatterns() []string {
+	patterns := make([]string, 0, len(m.includePatterns))
+	for _, p := range m.includePatterns {
+		if strings.HasSuffix(p, string(os.PathSeparator)) {
+			patterns = append(patterns, filepath.Join(p, "**"))
+		} else {
+			patterns = append(patterns, p)
 		}
 	}
+	return patterns
+}
 
+// IsExcluded checks if a path matches any exclusion pattern (.gitignore or --exclude).
+func (m *Manager) IsExcluded(path string, isDir bool) bool {
+	osPath := filepath.FromSlash(path)
 	for _, pattern := range m.excludePatterns {
 		if match, _ := doublestar.Match(pattern, osPath); match {
 			return true
