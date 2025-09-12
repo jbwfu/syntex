@@ -22,7 +22,7 @@ func main() {
 	pflag.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
 	pflag.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories. Can be used multiple times.")
 	pflag.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths. Can be used multiple times.")
-	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (e.g., markdown, md).") // New flag definition
+	pflag.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).") // Updated help text
 
 	pflag.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -64,7 +64,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Use the factory to create the formatter based on the flag value.
 	formatter, err := packer.NewFormatter(outputFormat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
