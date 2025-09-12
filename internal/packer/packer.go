@@ -3,6 +3,7 @@ package packer
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -35,24 +36,23 @@ func (p *Packer) ProcessPath(path string) error {
 	return p.processFile(path)
 }
 
-// processDirectory iterates over a directory and processes each file within.
-// It does not recurse into subdirectories.
-func (p *Packer) processDirectory(dirPath string) error {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return fmt.Errorf("cannot read directory %s: %w", dirPath, err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			filePath := filepath.Join(dirPath, entry.Name())
-			if err := p.processFile(filePath); err != nil {
-				// Log non-fatal errors to stderr and continue
-				fmt.Fprintf(os.Stderr, "warning: skipping file %s: %v\n", filePath, err)
-			}
+// processDirectory recursively walks a directory and processes each file within.
+func (p *Packer) processDirectory(rootPath string) error {
+	return filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-	}
-	return nil
+
+		if d.IsDir() {
+			return nil
+		}
+
+		if err := p.processFile(path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping file %s: %v\n", path, err)
+		}
+
+		return nil
+	})
 }
 
 // processFile reads a single file and writes its formatted content to the output.
