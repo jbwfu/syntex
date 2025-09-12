@@ -6,20 +6,25 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/jbwfu/syntex/internal/filter"
 )
 
 // Packer handles the logic of processing files and directories.
 type Packer struct {
 	formatter Formatter
 	output    io.Writer
+	filter    *filter.Manager
+	rootPath  string
 }
 
 // NewPacker creates a new Packer instance.
-// It takes a Formatter for content processing and an io.Writer for output.
-func NewPacker(f Formatter, out io.Writer) *Packer {
+func NewPacker(f Formatter, out io.Writer, filter *filter.Manager, rootPath string) *Packer {
 	return &Packer{
 		formatter: f,
 		output:    out,
+		filter:    filter,
+		rootPath:  rootPath,
 	}
 }
 
@@ -43,6 +48,21 @@ func (p *Packer) processDirectory(rootPath string) error {
 			return err
 		}
 
+		relPath, err := filepath.Rel(p.rootPath, path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not compute relative path for %s: %v\n", path, err)
+			return nil
+		}
+
+		if p.filter != nil && relPath != "." {
+			if p.filter.IsIgnored(relPath, d.IsDir()) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
 		if d.IsDir() {
 			return nil
 		}
@@ -57,6 +77,21 @@ func (p *Packer) processDirectory(rootPath string) error {
 
 // processFile reads a single file and writes its formatted content to the output.
 func (p *Packer) processFile(filePath string) error {
+	if p.filter != nil {
+		relPath, err := filepath.Rel(p.rootPath, filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not compute relative path for %s: %v\n", filePath, err)
+		} else {
+			info, statErr := os.Stat(filePath)
+			if statErr != nil {
+				return statErr
+			}
+			if p.filter.IsIgnored(relPath, info.IsDir()) {
+				return nil
+			}
+		}
+	}
+
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return err

@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/packer"
+	"github.com/jbwfu/syntex/internal/project"
 )
 
 func main() {
@@ -23,13 +25,34 @@ func main() {
 	}
 	targetPath := flag.Arg(0)
 
+	projectRoot, err := project.FindRoot(targetPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to determine project root for %s: %v\n", targetPath, err)
+		os.Exit(1)
+	}
+
+	// For now, we create default options. This will be driven by flags later.
+	filterOpts := filter.Options{
+		DisableGitignore: false,
+	}
+
+	filterManager, err := filter.NewManager(projectRoot, filterOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not initialize filter manager: %v\n", err)
+	}
+
 	// Setup dependencies
 	formatter := packer.NewMarkdownFormatter()
-	// Packer will write to standard output.
-	p := packer.NewPacker(formatter, os.Stdout)
+	p := packer.NewPacker(formatter, os.Stdout, filterManager, projectRoot)
 
 	// Execute core logic
-	if err := p.ProcessPath(targetPath); err != nil {
+	absTargetPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid path %s: %v\n", targetPath, err)
+		os.Exit(1)
+	}
+
+	if err := p.ProcessPath(absTargetPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
