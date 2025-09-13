@@ -20,6 +20,7 @@ type Options struct {
 	OutputFile      string
 	ToClipboard     bool
 	Targets         []string
+	FromStdin0      bool
 }
 
 // ParseFlags parses the command-line arguments and populates the Options struct.
@@ -37,6 +38,7 @@ func ParseFlags(args []string, stderr io.Writer) (*Options, error) {
 	fs.BoolVar(&opts.IncludeHidden, "include-hidden", false, "Include dotfiles and files in dot-directories in the output.")
 	fs.StringVarP(&opts.OutputFile, "output", "o", "", "Write output to a file instead of stdout.")
 	fs.BoolVarP(&opts.ToClipboard, "clipboard", "c", false, "Write output to the system clipboard.")
+	fs.BoolVarP(&opts.FromStdin0, "from-stdin-0", "0", false, "Read NUL-separated file paths from stdin (e.g., from find . -print0).")
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -50,9 +52,9 @@ func ParseFlags(args []string, stderr io.Writer) (*Options, error) {
 	}
 
 	opts.Targets = fs.Args()
-	if len(opts.Targets) == 0 && len(opts.IncludePatterns) == 0 {
+	if len(opts.Targets) == 0 && len(opts.IncludePatterns) == 0 && !opts.FromStdin0 {
 		fs.Usage()
-		return nil, fmt.Errorf("no target paths or globs provided")
+		return nil, fmt.Errorf("no target paths or globs provided, and -0/--from-stdin-0 was not specified to read from stdin")
 	}
 
 	return opts, nil

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/jbwfu/syntex/cmd/syntex/options"
 	"github.com/jbwfu/syntex/internal/clipboard"
@@ -80,9 +83,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	languageDetector := language.NewDetector()
+
+	var allTargets []string
+	allTargets = append(allTargets, opts.Targets...)
+
+	if opts.FromStdin0 {
+		if err := readNULSeparatedPathsFromStdin(&allTargets); err != nil {
+			return err
+		}
+	}
+
 	p := packer.NewPacker(formatter, finalOutputWriter, filterManager, languageDetector)
 
-	plan, err := p.Plan(opts.Targets)
+	plan, err := p.Plan(allTargets)
 	if err != nil {
 		return fmt.Errorf("planning phase failed: %w", err)
 	}
@@ -95,6 +108,35 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("execution phase failed: %w", err)
 	}
 
+	return nil
+}
+
+// readNULSeparatedPathsFromStdin reads NUL-separated file paths from os.Stdin
+// and appends them to the provided targetList.
+func readNULSeparatedPathsFromStdin(targetList *[]string) error {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data, '\x00'); i >= 0 {
+			return i + 1, data[0:i], nil
+		}
+		if atEOF {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+
+	for scanner.Scan() {
+		path := scanner.Text()
+		if trimmedPath := strings.TrimSpace(path); trimmedPath != "" {
+			*targetList = append(*targetList, trimmedPath)
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return fmt.Errorf("failed to read NUL-separated paths from stdin: %w", scanErr)
+	}
 	return nil
 }
 
