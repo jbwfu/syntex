@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
+	"github.com/jbwfu/syntex/cmd/syntex/options"
 	"github.com/jbwfu/syntex/internal/clipboard"
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
@@ -28,49 +28,15 @@ func main() {
 // It parses flags, initializes dependencies, plans the file processing,
 // and executes the plan, writing the output to stdout, a specified file, or the clipboard.
 func run(args []string, stdout, stderr io.Writer) error {
-	fs := pflag.NewFlagSet("syntex", pflag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	var (
-		noGitignore     bool
-		excludePatterns []string
-		includePatterns []string
-		outputFormat    string
-		dryRun          bool
-		includeHidden   bool
-		outputFile      string
-		toClipboard     bool
-	)
-
-	fs.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
-	fs.StringSliceVar(&excludePatterns, "exclude", nil, "Patterns to exclude files or directories.")
-	fs.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths.")
-	fs.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
-	fs.BoolVar(&dryRun, "dry-run", false, "Print the list of files to be processed without generating output.")
-	fs.BoolVar(&includeHidden, "include-hidden", false, "Include dotfiles and files in dot-directories in the output.")
-	fs.StringVarP(&outputFile, "output", "o", "", "Write output to a file instead of stdout.")
-	fs.BoolVarP(&toClipboard, "clipboard", "c", false, "Write output to the system clipboard.")
-
-	fs.Usage = func() {
-		progName := filepath.Base(os.Args[0])
-		fmt.Fprintf(stderr, "Usage: %s [flags] [path_or_glob...]\n", progName)
-		fmt.Fprintf(stderr, "\nOptions:\n")
-		fs.PrintDefaults()
-	}
-
-	if err := fs.Parse(args); err != nil {
+	opts, err := options.ParseFlags(args, stderr)
+	if err != nil {
 		return err
-	}
-
-	targets := fs.Args()
-	if len(targets) == 0 && len(includePatterns) == 0 {
-		fs.Usage()
-		return fmt.Errorf("no target paths or globs provided")
 	}
 
 	// Collect all output writers
 	var outputWriters []io.Writer
 
+	outputFile := opts.OutputFile
 	if outputFile != "" {
 		f, err := os.Create(outputFile)
 		if err != nil {
@@ -80,7 +46,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		outputWriters = append(outputWriters, f)
 	}
 
-	if toClipboard {
+	if opts.ToClipboard {
 		cw := clipboard.NewWriter()
 		defer func() {
 			if err := cw.Close(); err != nil {
@@ -98,17 +64,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	finalOutputWriter := io.MultiWriter(outputWriters...)
 
 	filterOpts := filter.Options{
-		DisableGitignore: noGitignore,
-		ExcludePatterns:  excludePatterns,
-		IncludePatterns:  includePatterns,
-		AllowDotfiles:    includeHidden,
+		DisableGitignore: opts.NoGitignore,
+		ExcludePatterns:  opts.ExcludePatterns,
+		IncludePatterns:  opts.IncludePatterns,
+		AllowDotfiles:    opts.IncludeHidden,
 	}
 	filterManager, err := filter.NewManager(filterOpts)
 	if err != nil {
 		return fmt.Errorf("failed to initialize filter manager: %w", err)
 	}
 
-	formatter, err := packer.NewFormatter(outputFormat)
+	formatter, err := packer.NewFormatter(opts.OutputFormat)
 	if err != nil {
 		return err
 	}
@@ -116,13 +82,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	languageDetector := language.NewDetector()
 	p := packer.NewPacker(formatter, finalOutputWriter, filterManager, languageDetector)
 
-	plan, err := p.Plan(targets)
+	plan, err := p.Plan(opts.Targets)
 	if err != nil {
 		return fmt.Errorf("planning phase failed: %w", err)
 	}
 
-	if dryRun {
-		return printDryRun(stdout, plan, outputFormat)
+	if opts.DryRun {
+		return printDryRun(stdout, plan, opts.OutputFormat)
 	}
 
 	if err := p.Execute(plan); err != nil {
