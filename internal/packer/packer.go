@@ -51,13 +51,11 @@ func NewPacker(
 // Files from `--include` patterns bypass .gitignore rules.
 func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
 	// Use a map with absolute paths as keys to ensure file uniqueness.
-	// The value is the original matched path, which we preserve for output.
 	uniqueFiles := make(map[string]string)
 
 	// Process --include patterns first, as they have override priority.
 	for _, pattern := range p.filter.GetIncludePatterns() {
 		if err := p.processPattern(pattern, uniqueFiles, true); err != nil {
-			// Log warnings for non-critical errors and continue.
 			fmt.Fprintf(os.Stderr, "warning: could not process include pattern %q: %v\n", pattern, err)
 		}
 	}
@@ -133,13 +131,14 @@ func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]stri
 		return
 	}
 
-	if shouldIgnoreDotfile(path, pattern) {
+	// Apply dotfile/dot-directory ignoring logic.
+	if p.filter.IsDotfileIgnored(path, pattern) {
 		return
 	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return // Cannot get an absolute path, so we cannot safely process it.
+		return
 	}
 
 	// Ensure each file is processed only once.
@@ -158,35 +157,6 @@ func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]stri
 	}
 
 	uniqueFiles[absPath] = path
-}
-
-// shouldIgnoreDotfile determines if a file should be ignored based on dotfile/dot-directory rules.
-// It returns true if any component of the file's path (including the file itself)
-// starts with a dot, AND the corresponding component in the glob pattern did NOT
-// explicitly start with a dot. This implements the "ignore hidden unless explicitly asked" rule.
-func shouldIgnoreDotfile(filePath, globPattern string) bool {
-	filePath = filepath.ToSlash(filePath)
-	globPattern = filepath.ToSlash(globPattern)
-
-	filePathComponents := strings.Split(filePath, "/")
-	globPatternComponents := strings.Split(globPattern, "/")
-
-	for i, pathComp := range filePathComponents {
-		if pathComp == "." || pathComp == ".." || pathComp == "" {
-			continue
-		}
-
-		// If this path component is hidden (starts with a dot).
-		if strings.HasPrefix(pathComp, ".") {
-			// Ignore if the corresponding glob pattern component is not explicit for dotfiles.
-			// A pattern is explicit if its component also starts with a dot.
-			// This also covers cases where `**` matched multiple levels, and `i` is out of bounds for globPatternComponents.
-			if i >= len(globPatternComponents) || !strings.HasPrefix(globPatternComponents[i], ".") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // preparePattern expands a tilde prefix and converts directory paths into

@@ -37,6 +37,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		includePatterns []string
 		outputFormat    string
 		dryRun          bool
+		includeHidden   bool
 	)
 
 	fs.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
@@ -44,6 +45,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringSliceVar(&includePatterns, "include", nil, "Patterns to force include files or to specify input paths.")
 	fs.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
 	fs.BoolVar(&dryRun, "dry-run", false, "Print the list of files to be processed without generating output.")
+	fs.BoolVar(&includeHidden, "include-hidden", false, "Include dotfiles and files in dot-directories in the output.")
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -66,6 +68,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		DisableGitignore: noGitignore,
 		ExcludePatterns:  excludePatterns,
 		IncludePatterns:  includePatterns,
+		AllowDotfiles:    includeHidden,
 	}
 	filterManager, err := filter.NewManager(filterOpts)
 	if err != nil {

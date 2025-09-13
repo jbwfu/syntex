@@ -44,6 +44,7 @@ type Manager struct {
 	includePatterns  []string
 	excludePatterns  []string
 	disableGitignore bool
+	allowDotfiles    bool
 
 	mu          sync.Mutex
 	rootFilters map[string]*gitignoreFilter
@@ -54,6 +55,7 @@ type Options struct {
 	DisableGitignore bool
 	ExcludePatterns  []string
 	IncludePatterns  []string
+	AllowDotfiles    bool
 }
 
 // NewManager creates a new filter Manager.
@@ -62,6 +64,7 @@ func NewManager(opts Options) (*Manager, error) {
 		includePatterns:  opts.IncludePatterns,
 		excludePatterns:  opts.ExcludePatterns,
 		disableGitignore: opts.DisableGitignore,
+		allowDotfiles:    opts.AllowDotfiles,
 		rootFilters:      make(map[string]*gitignoreFilter),
 	}, nil
 }
@@ -81,7 +84,7 @@ func (m *Manager) IsGloballyExcluded(absPath string) bool {
 	}
 
 	for _, pattern := range m.excludePatterns {
-		// Try matching against the absolute path first. This handles absolute exclude patterns.
+		// Try matching against the absolute path first.
 		if match, _ := doublestar.Match(pattern, absPath); match {
 			return true
 		}
@@ -106,27 +109,52 @@ func (m *Manager) IsGitIgnored(absPath string, isDir bool) bool {
 		return false
 	}
 
-	// Find the git repository root for the given path.
 	root, isRepo, err := project.FindRoot(filepath.Dir(absPath))
 	if err != nil || !isRepo {
-		// Not in a git repo or an error occurred, so it cannot be git-ignored.
 		return false
 	}
 
 	filter, err := m.getOrCreateFilter(root)
 	if err != nil {
-		// If filter creation fails, conservatively assume the file is not ignored.
-		// Consider logging this error in a real application.
 		return false
 	}
 
 	relPath, err := filepath.Rel(root, absPath)
 	if err != nil {
-		// Cannot determine relative path, so cannot apply ignore rules.
 		return false
 	}
 
 	return filter.isIgnored(relPath, isDir)
+}
+
+// IsDotfileIgnored determines if a file is hidden and not explicitly matched by its pattern,
+// unless the Manager is configured to include hidden files.
+func (m *Manager) IsDotfileIgnored(filePath, globPattern string) bool {
+	if m.allowDotfiles {
+		return false // If hidden files are allowed, never ignore them by this rule.
+	}
+
+	filePath = filepath.ToSlash(filePath)
+	globPattern = filepath.ToSlash(globPattern)
+
+	filePathComponents := strings.Split(filePath, "/")
+	globPatternComponents := strings.Split(globPattern, "/")
+
+	for i, pathComp := range filePathComponents {
+		if pathComp == "." || pathComp == ".." || pathComp == "" {
+			continue
+		}
+
+		// If this path component is hidden (starts with a dot).
+		if strings.HasPrefix(pathComp, ".") {
+			// Ignore if the corresponding glob pattern component is not explicit for dotfiles.
+			// A pattern is explicit if its component also starts with a dot.
+			if i >= len(globPatternComponents) || !strings.HasPrefix(globPatternComponents[i], ".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getOrCreateFilter retrieves a gitignoreFilter from the cache or creates a new one.
