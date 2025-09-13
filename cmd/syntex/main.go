@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jbwfu/syntex/internal/clipboard"
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
 	"github.com/jbwfu/syntex/internal/packer"
@@ -25,7 +26,7 @@ func main() {
 
 // run executes the main logic of the syntex command-line tool.
 // It parses flags, initializes dependencies, plans the file processing,
-// and executes the plan, writing the output to stdout or a specified file.
+// and executes the plan, writing the output to stdout, a specified file, or the clipboard.
 func run(args []string, stdout, stderr io.Writer) error {
 	fs := pflag.NewFlagSet("syntex", pflag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -37,7 +38,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		outputFormat    string
 		dryRun          bool
 		includeHidden   bool
-		outputFile      string // New: Path to output file
+		outputFile      string
+		toClipboard     bool
 	)
 
 	fs.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
@@ -47,6 +49,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&dryRun, "dry-run", false, "Print the list of files to be processed without generating output.")
 	fs.BoolVar(&includeHidden, "include-hidden", false, "Include dotfiles and files in dot-directories in the output.")
 	fs.StringVarP(&outputFile, "output", "o", "", "Write output to a file instead of stdout.")
+	fs.BoolVarP(&toClipboard, "clipboard", "c", false, "Write output to the system clipboard.")
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -65,15 +68,34 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("no target paths or globs provided")
 	}
 
-	outputWriter := stdout
+	// Collect all output writers
+	var outputWriters []io.Writer
+
 	if outputFile != "" {
 		f, err := os.Create(outputFile)
 		if err != nil {
 			return fmt.Errorf("failed to create output file %q: %w", outputFile, err)
 		}
 		defer f.Close()
-		outputWriter = f
+		outputWriters = append(outputWriters, f)
 	}
+
+	if toClipboard {
+		cw := clipboard.NewWriter()
+		defer func() {
+			if err := cw.Close(); err != nil {
+				fmt.Fprintf(stderr, "warning: failed to write to clipboard: %v\n", err)
+			}
+		}()
+		outputWriters = append(outputWriters, cw)
+	}
+
+	if len(outputWriters) == 0 {
+		outputWriters = append(outputWriters, stdout)
+	}
+
+	// Combine all writers into a single MultiWriter
+	finalOutputWriter := io.MultiWriter(outputWriters...)
 
 	filterOpts := filter.Options{
 		DisableGitignore: noGitignore,
@@ -92,7 +114,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	languageDetector := language.NewDetector()
-	p := packer.NewPacker(formatter, outputWriter, filterManager, languageDetector)
+	p := packer.NewPacker(formatter, finalOutputWriter, filterManager, languageDetector)
 
 	plan, err := p.Plan(targets)
 	if err != nil {
