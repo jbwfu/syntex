@@ -4,12 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	"github.com/jbwfu/syntex/internal/project"
 )
 
+// gitignoreFilter internal struct to hold a matcher for a specific root.
 type gitignoreFilter struct {
 	matcher gitignore.Matcher
 }
@@ -18,22 +21,30 @@ func newGitignoreFilter(rootPath string) (*gitignoreFilter, error) {
 	fs := osfs.New(rootPath)
 	patterns, err := gitignore.ReadPatterns(fs, nil)
 	if err != nil {
+		// .gitignore not existing is not an error, just means no patterns.
+		if os.IsNotExist(err) {
+			return &gitignoreFilter{matcher: gitignore.NewMatcher(nil)}, nil
+		}
 		return nil, err
 	}
+	// Always ignore the .git directory itself.
 	patterns = append(patterns, gitignore.ParsePattern(".git", nil))
 	return &gitignoreFilter{matcher: gitignore.NewMatcher(patterns)}, nil
 }
 
-func (f *gitignoreFilter) IsIgnored(path string, isDir bool) bool {
-	components := strings.Split(filepath.ToSlash(path), "/")
+func (f *gitignoreFilter) IsIgnored(pathRelativeToRoot string, isDir bool) bool {
+	components := strings.Split(filepath.ToSlash(pathRelativeToRoot), "/")
 	return f.matcher.Match(components, isDir)
 }
 
-// Manager orchestrates filtering logic.
+// Manager orchestrates filtering logic with caching for multiple git repositories.
 type Manager struct {
-	includePatterns []string
-	excludePatterns []string
-	gitignoreFilter *gitignoreFilter
+	includePatterns  []string
+	excludePatterns  []string
+	disableGitignore bool
+
+	mu          sync.Mutex
+	rootFilters map[string]*gitignoreFilter
 }
 
 // Options configures the behavior of the filter Manager.
@@ -43,49 +54,66 @@ type Options struct {
 	IncludePatterns  []string
 }
 
-// NewManager creates a new filter Manager based on the provided options.
-func NewManager(rootPath string, opts Options) (*Manager, error) {
-	m := &Manager{
-		includePatterns: opts.IncludePatterns,
-		excludePatterns: opts.ExcludePatterns,
-	}
-
-	if !opts.DisableGitignore {
-		var err error
-		m.gitignoreFilter, err = newGitignoreFilter(rootPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return m, nil
+// NewManager creates a new filter Manager.
+func NewManager(opts Options) (*Manager, error) {
+	return &Manager{
+		includePatterns:  opts.IncludePatterns,
+		excludePatterns:  opts.ExcludePatterns,
+		disableGitignore: opts.DisableGitignore,
+		rootFilters:      make(map[string]*gitignoreFilter),
+	}, nil
 }
 
-// GetIncludePatterns returns the configured include patterns, expanding directory
-// paths to match all contents.
+// GetIncludePatterns returns the configured include patterns.
 func (m *Manager) GetIncludePatterns() []string {
-	patterns := make([]string, 0, len(m.includePatterns))
-	for _, p := range m.includePatterns {
-		if strings.HasSuffix(p, string(os.PathSeparator)) {
-			patterns = append(patterns, filepath.Join(p, "**"))
-		} else {
-			patterns = append(patterns, p)
-		}
-	}
-	return patterns
+	return m.includePatterns
 }
 
-// IsExcluded checks if a path matches any exclusion pattern (.gitignore or --exclude).
-func (m *Manager) IsExcluded(path string, isDir bool) bool {
-	osPath := filepath.FromSlash(path)
+// IsGloballyExcluded checks if a path matches any user-defined --exclude patterns.
+// It expects an absolute path for consistent matching.
+func (m *Manager) IsGloballyExcluded(absPath string) bool {
 	for _, pattern := range m.excludePatterns {
-		if match, _ := doublestar.Match(pattern, osPath); match {
+		// Match against the absolute path to handle patterns correctly.
+		if match, _ := doublestar.Match(pattern, absPath); match {
 			return true
 		}
 	}
+	return false
+}
 
-	if m.gitignoreFilter != nil && m.gitignoreFilter.IsIgnored(path, isDir) {
-		return true
+// IsGitIgnored checks if a path is ignored by a .gitignore file from its
+// containing repository. It uses a cache to avoid re-parsing .gitignore files.
+// It expects an absolute path.
+func (m *Manager) IsGitIgnored(absPath string, isDir bool) bool {
+	if m.disableGitignore {
+		return false
 	}
 
-	return false
+	root, isRepo, err := project.FindRoot(filepath.Dir(absPath))
+	if err != nil || !isRepo {
+		// Not in a git repo or error finding root, so not ignored by git.
+		return false
+	}
+
+	m.mu.Lock()
+	filter, found := m.rootFilters[root]
+	if !found {
+		// Cache miss, create and store a new filter.
+		var creationErr error
+		filter, creationErr = newGitignoreFilter(root)
+		if creationErr != nil {
+			m.mu.Unlock()
+			return false
+		}
+		m.rootFilters[root] = filter
+	}
+	m.mu.Unlock()
+
+	relPath, err := filepath.Rel(root, absPath)
+	if err != nil {
+		// Cannot determine relative path, assume not ignored.
+		return false
+	}
+
+	return filter.IsIgnored(relPath, isDir)
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
 	"github.com/jbwfu/syntex/internal/packer"
-	"github.com/jbwfu/syntex/internal/project"
+
 	"github.com/spf13/pflag"
 )
 
@@ -54,22 +54,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	targets := fs.Args()
-	if len(targets) == 0 && len(includePatterns) > 0 {
-		targets = includePatterns
-	}
-
-	if len(targets) == 0 {
+	if len(targets) == 0 && len(includePatterns) == 0 {
 		fs.Usage()
 		return fmt.Errorf("no target paths or globs provided")
-	}
-
-	rootDiscoveryPath := "."
-	if fs.NArg() > 0 {
-		rootDiscoveryPath = targets[0]
-	}
-	projectRoot, err := project.FindRoot(rootDiscoveryPath)
-	if err != nil {
-		return fmt.Errorf("failed to determine project root: %w", err)
 	}
 
 	filterOpts := filter.Options{
@@ -77,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		ExcludePatterns:  excludePatterns,
 		IncludePatterns:  includePatterns,
 	}
-	filterManager, err := filter.NewManager(projectRoot, filterOpts)
+	filterManager, err := filter.NewManager(filterOpts)
 	if err != nil {
 		return fmt.Errorf("failed to initialize filter manager: %w", err)
 	}
@@ -89,7 +76,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	languageDetector := language.NewDetector()
 
-	p := packer.NewPacker(formatter, stdout, filterManager, languageDetector, projectRoot)
+	p := packer.NewPacker(formatter, stdout, filterManager, languageDetector)
 
 	plan, err := p.Plan(targets)
 	if err != nil {
@@ -104,7 +91,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		fmt.Fprintf(stdout, "[Dry Run] Planning to process files using the '%s' format:\n", outputFormat)
 
-		// For aligned output, find the longest path
 		maxLen := 0
 		for _, file := range plan {
 			if len(file.Path) > maxLen {

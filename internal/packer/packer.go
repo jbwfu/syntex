@@ -3,10 +3,11 @@ package packer
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/jbwfu/syntex/internal/filter"
@@ -25,7 +26,6 @@ type Packer struct {
 	output    io.Writer
 	filter    *filter.Manager
 	detector  *language.Detector
-	rootPath  string
 }
 
 // NewPacker creates a new Packer instance with all its dependencies injected.
@@ -34,27 +34,63 @@ func NewPacker(
 	out io.Writer,
 	filter *filter.Manager,
 	detector *language.Detector,
-	rootPath string,
 ) *Packer {
 	return &Packer{
 		formatter: f,
 		output:    out,
 		filter:    filter,
 		detector:  detector,
-		rootPath:  rootPath,
 	}
+}
+
+// expandTilde expands the '~' prefix in a path to the user's home directory.
+func expandTilde(path string) (string, error) {
+	if !strings.HasPrefix(path, "~") {
+		return path, nil
+	}
+	usr, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(usr.HomeDir, path[1:]), nil
 }
 
 // Plan discovers and filters files based on include patterns and target paths.
 func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
-	planFiles := make(map[string]PlannedFile)
+	uniqueFiles := make(map[string]string)
 
-	p.processIncludes(planFiles)
-	p.processTargets(targets, planFiles)
+	// Process --include patterns first. These bypass .gitignore.
+	for _, pattern := range p.filter.GetIncludePatterns() {
+		processedPattern, err := p.preparePattern(pattern)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not process pattern %q: %v\n", pattern, err)
+			continue
+		}
+		matches, _ := doublestar.FilepathGlob(processedPattern)
+		for _, match := range matches {
+			p.addFile(match, uniqueFiles, true) // isFromInclude = true
+		}
+	}
 
-	result := make([]PlannedFile, 0, len(planFiles))
-	for _, pf := range planFiles {
-		result = append(result, pf)
+	// Process positional target patterns. These respect .gitignore.
+	for _, pattern := range targets {
+		processedPattern, err := p.preparePattern(pattern)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not process pattern %q: %v\n", pattern, err)
+			continue
+		}
+		matches, _ := doublestar.FilepathGlob(processedPattern)
+		for _, match := range matches {
+			p.addFile(match, uniqueFiles, false) // isFromInclude = false
+		}
+	}
+
+	result := make([]PlannedFile, 0, len(uniqueFiles))
+	for _, originalPath := range uniqueFiles {
+		result = append(result, PlannedFile{
+			Path:     originalPath,
+			Language: p.detector.GetLanguage(originalPath),
+		})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -64,60 +100,30 @@ func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
 	return result, nil
 }
 
-func (p *Packer) processIncludes(plan map[string]PlannedFile) {
-	for _, pattern := range p.filter.GetIncludePatterns() {
-		matches, _ := doublestar.Glob(os.DirFS("."), pattern)
-		for _, match := range matches {
-			if info, err := os.Stat(match); err == nil && !info.IsDir() {
-				plan[match] = PlannedFile{
-					Path:     match,
-					Language: p.detector.GetLanguage(match),
-				}
-			}
-		}
+// preparePattern expands tilde and converts directory paths to recursive globs.
+func (p *Packer) preparePattern(pattern string) (string, error) {
+	expanded, err := expandTilde(pattern)
+	if err != nil {
+		return "", err
 	}
-}
 
-func (p *Packer) processTargets(targets []string, plan map[string]PlannedFile) {
-	for _, target := range targets {
-		info, err := os.Stat(target)
-		if err == nil && info.IsDir() {
-			p.walkDirectory(target, plan)
-		} else {
-			matches, _ := doublestar.Glob(os.DirFS("."), target)
-			for _, match := range matches {
-				p.addFileIfValid(match, plan)
-			}
-		}
+	if strings.HasSuffix(expanded, string(os.PathSeparator)) {
+		return filepath.Join(expanded, "**"), nil
 	}
+
+	// Also check if the path exists and is a directory, even without a trailing slash.
+	info, err := os.Stat(expanded)
+	if err == nil && info.IsDir() {
+		return filepath.Join(expanded, "**"), nil
+	}
+
+	return expanded, nil
 }
 
-func (p *Packer) walkDirectory(dir string, plan map[string]PlannedFile) {
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			absPath, err := filepath.Abs(path)
-			if err != nil {
-				return nil
-			}
-			relPath, err := filepath.Rel(p.rootPath, absPath)
-			if err != nil {
-				return nil
-			}
-			if p.filter.IsExcluded(relPath, true) {
-				return filepath.SkipDir
-			}
-		} else {
-			p.addFileIfValid(path, plan)
-		}
-		return nil
-	})
-}
-
-func (p *Packer) addFileIfValid(path string, plan map[string]PlannedFile) {
-	if _, exists := plan[path]; exists {
+// addFile checks and adds a file to the plan, respecting uniqueness and filtering rules.
+func (p *Packer) addFile(path string, uniqueFiles map[string]string, isFromInclude bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
 		return
 	}
 
@@ -125,17 +131,20 @@ func (p *Packer) addFileIfValid(path string, plan map[string]PlannedFile) {
 	if err != nil {
 		return
 	}
-	relPath, err := filepath.Rel(p.rootPath, absPath)
-	if err != nil {
+
+	if _, exists := uniqueFiles[absPath]; exists {
 		return
 	}
 
-	if !p.filter.IsExcluded(relPath, false) {
-		plan[path] = PlannedFile{
-			Path:     path,
-			Language: p.detector.GetLanguage(path),
-		}
+	if p.filter.IsGloballyExcluded(absPath) {
+		return
 	}
+
+	if !isFromInclude && p.filter.IsGitIgnored(absPath, false) {
+		return
+	}
+
+	uniqueFiles[absPath] = path
 }
 
 // Execute processes a list of PlannedFile items, formats them, and writes to output.
