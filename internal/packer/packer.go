@@ -160,21 +160,33 @@ func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]stri
 	uniqueFiles[absPath] = path
 }
 
-// shouldIgnoreDotfile contains the business logic for deciding if a dotfile
-// should be ignored based on the context of how it was found.
-func shouldIgnoreDotfile(path, pattern string) bool {
-	baseName := filepath.Base(path)
-	isDotfile := strings.HasPrefix(baseName, ".") && baseName != "." && baseName != ".."
-	if !isDotfile {
-		return false
-	}
+// shouldIgnoreDotfile determines if a file should be ignored based on dotfile/dot-directory rules.
+// It returns true if any component of the file's path (including the file itself)
+// starts with a dot, AND the corresponding component in the glob pattern did NOT
+// explicitly start with a dot. This implements the "ignore hidden unless explicitly asked" rule.
+func shouldIgnoreDotfile(filePath, globPattern string) bool {
+	filePath = filepath.ToSlash(filePath)
+	globPattern = filepath.ToSlash(globPattern)
 
-	patternBase := filepath.Base(pattern)
-	if strings.HasPrefix(patternBase, ".") {
-		return false
-	}
+	filePathComponents := strings.Split(filePath, "/")
+	globPatternComponents := strings.Split(globPattern, "/")
 
-	return true
+	for i, pathComp := range filePathComponents {
+		if pathComp == "." || pathComp == ".." || pathComp == "" {
+			continue
+		}
+
+		// If this path component is hidden (starts with a dot).
+		if strings.HasPrefix(pathComp, ".") {
+			// Ignore if the corresponding glob pattern component is not explicit for dotfiles.
+			// A pattern is explicit if its component also starts with a dot.
+			// This also covers cases where `**` matched multiple levels, and `i` is out of bounds for globPatternComponents.
+			if i >= len(globPatternComponents) || !strings.HasPrefix(globPatternComponents[i], ".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // preparePattern expands a tilde prefix and converts directory paths into

@@ -72,12 +72,27 @@ func (m *Manager) GetIncludePatterns() []string {
 }
 
 // IsGloballyExcluded checks if a path matches any user-defined --exclude patterns.
-// It expects an absolute path for consistent and reliable matching.
+// It provides robust filtering by attempting to match patterns against both
+// the absolute path and the path relative to the current working directory (CWD).
 func (m *Manager) IsGloballyExcluded(absPath string) bool {
+	cwd, getCwdErr := os.Getwd()
+	if getCwdErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not get current working directory for global exclusion: %v\n", getCwdErr)
+	}
+
 	for _, pattern := range m.excludePatterns {
-		// Match against the absolute path to handle various pattern forms correctly.
+		// Try matching against the absolute path first. This handles absolute exclude patterns.
 		if match, _ := doublestar.Match(pattern, absPath); match {
 			return true
+		}
+
+		if getCwdErr == nil {
+			relPath, err := filepath.Rel(cwd, absPath)
+			if err == nil {
+				if match, _ := doublestar.Match(pattern, relPath); match {
+					return true
+				}
+			}
 		}
 	}
 	return false
