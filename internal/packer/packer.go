@@ -91,7 +91,6 @@ func (p *Packer) Execute(plan []PlannedFile) error {
 	for _, file := range plan {
 		content, err := os.ReadFile(file.Path)
 		if err != nil {
-			// It's better to warn about unreadable files than to fail the whole process.
 			fmt.Fprintf(os.Stderr, "warning: skipping unreadable file %s: %v\n", file.Path, err)
 			continue
 		}
@@ -121,17 +120,20 @@ func (p *Packer) processPattern(pattern string, uniqueFiles map[string]string, i
 	}
 
 	for _, match := range matches {
-		p.addFileToPlan(match, uniqueFiles, isFromInclude)
+		p.addFileToPlan(match, processedPattern, uniqueFiles, isFromInclude)
 	}
 	return nil
 }
 
 // addFileToPlan validates a single file path and, if it passes all checks,
 // adds it to the map of unique files for processing.
-func (p *Packer) addFileToPlan(path string, uniqueFiles map[string]string, isFromInclude bool) {
+func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]string, isFromInclude bool) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		// We only process files, not directories or un-stat-able paths.
+		return
+	}
+
+	if shouldIgnoreDotfile(path, pattern) {
 		return
 	}
 
@@ -156,6 +158,23 @@ func (p *Packer) addFileToPlan(path string, uniqueFiles map[string]string, isFro
 	}
 
 	uniqueFiles[absPath] = path
+}
+
+// shouldIgnoreDotfile contains the business logic for deciding if a dotfile
+// should be ignored based on the context of how it was found.
+func shouldIgnoreDotfile(path, pattern string) bool {
+	baseName := filepath.Base(path)
+	isDotfile := strings.HasPrefix(baseName, ".") && baseName != "." && baseName != ".."
+	if !isDotfile {
+		return false
+	}
+
+	patternBase := filepath.Base(pattern)
+	if strings.HasPrefix(patternBase, ".") {
+		return false
+	}
+
+	return true
 }
 
 // preparePattern expands a tilde prefix and converts directory paths into

@@ -85,10 +85,9 @@ func TestPacker_Plan(t *testing.T) {
 			expectedPlan: []string{"main.go", "src/app.go"},
 		},
 		{
-			name:    "should ignore files from .gitignore but include dotfiles for now",
-			targets: []string{"*"}, // Matches main.go, main.log, README.md, .gitignore at root
-			// CRITICAL CHANGE: We acknowledge the current buggy behavior in the test.
-			expectedPlan: []string{".gitignore", "main.go", "README.md"},
+			name:         "should ignore files from .gitignore and also dotfiles",
+			targets:      []string{"*"}, // Matches main.go, main.log, README.md, .gitignore at root
+			expectedPlan: []string{"main.go", "README.md"},
 		},
 		{
 			name:            "should force include gitignored file with --include",
@@ -112,6 +111,11 @@ func TestPacker_Plan(t *testing.T) {
 			targets:         []string{"main.go"},
 			includePatterns: []string{outsideFile.Name()},
 			expectedPlan:    []string{"main.go", outsideFile.Name()},
+		},
+		{
+			name:         "should include dotfiles when pattern explicitly starts with a dot",
+			targets:      []string{".*"}, // This pattern explicitly targets dotfiles
+			expectedPlan: []string{".gitignore"},
 		},
 	}
 
