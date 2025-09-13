@@ -15,7 +15,6 @@ import (
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		// pflag.ErrHelp is a special case where the program should exit cleanly.
 		if errors.Is(err, pflag.ErrHelp) {
 			os.Exit(0)
 		}
@@ -26,7 +25,7 @@ func main() {
 
 // run executes the main logic of the syntex command-line tool.
 // It parses flags, initializes dependencies, plans the file processing,
-// and executes the plan, writing the output to stdout.
+// and executes the plan, writing the output to stdout or a specified file.
 func run(args []string, stdout, stderr io.Writer) error {
 	fs := pflag.NewFlagSet("syntex", pflag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -38,6 +37,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		outputFormat    string
 		dryRun          bool
 		includeHidden   bool
+		outputFile      string // New: Path to output file
 	)
 
 	fs.BoolVar(&noGitignore, "no-gitignore", false, "Disable the use of .gitignore files for filtering.")
@@ -46,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVarP(&outputFormat, "format", "f", "markdown", "Output format (markdown, md, org).")
 	fs.BoolVar(&dryRun, "dry-run", false, "Print the list of files to be processed without generating output.")
 	fs.BoolVar(&includeHidden, "include-hidden", false, "Include dotfiles and files in dot-directories in the output.")
+	fs.StringVarP(&outputFile, "output", "o", "", "Write output to a file instead of stdout.")
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -62,6 +63,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(targets) == 0 && len(includePatterns) == 0 {
 		fs.Usage()
 		return fmt.Errorf("no target paths or globs provided")
+	}
+
+	outputWriter := stdout
+	if outputFile != "" {
+		f, err := os.Create(outputFile)
+		if err != nil {
+			return fmt.Errorf("failed to create output file %q: %w", outputFile, err)
+		}
+		defer f.Close()
+		outputWriter = f
 	}
 
 	filterOpts := filter.Options{
@@ -81,7 +92,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	languageDetector := language.NewDetector()
-	p := packer.NewPacker(formatter, stdout, filterManager, languageDetector)
+	p := packer.NewPacker(formatter, outputWriter, filterManager, languageDetector)
 
 	plan, err := p.Plan(targets)
 	if err != nil {
