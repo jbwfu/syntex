@@ -28,15 +28,12 @@ func main() {
 }
 
 // run executes the main logic of the syntex command-line tool.
-// It parses flags, initializes dependencies, plans the file processing,
-// and executes the plan, writing the output to stdout, a specified file, or the clipboard.
 func run(args []string, stdout, stderr io.Writer) error {
 	opts, err := options.ParseFlags(args, stderr)
 	if err != nil {
 		return err
 	}
 
-	// Collect all output writers
 	var outputWriters []io.Writer
 
 	outputFile := opts.OutputFile
@@ -63,7 +60,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		outputWriters = append(outputWriters, stdout)
 	}
 
-	// Combine all writers into a single MultiWriter
 	finalOutputWriter := io.MultiWriter(outputWriters...)
 
 	filterOpts := filter.Options{
@@ -89,6 +85,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	if opts.FromStdin0 {
 		if err := readNULSeparatedPathsFromStdin(&allTargets); err != nil {
+			return err
+		}
+	} else if opts.FromStdinLine {
+		if err := readNewlineSeparatedPathsFromStdin(&allTargets); err != nil {
 			return err
 		}
 	}
@@ -129,13 +129,27 @@ func readNULSeparatedPathsFromStdin(targetList *[]string) error {
 	})
 
 	for scanner.Scan() {
-		path := scanner.Text()
-		if trimmedPath := strings.TrimSpace(path); trimmedPath != "" {
+		if trimmedPath := strings.TrimSpace(scanner.Text()); trimmedPath != "" {
 			*targetList = append(*targetList, trimmedPath)
 		}
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
 		return fmt.Errorf("failed to read NUL-separated paths from stdin: %w", scanErr)
+	}
+	return nil
+}
+
+// readNewlineSeparatedPathsFromStdin reads newline-separated file paths from os.Stdin
+// and appends them to the provided targetList.
+func readNewlineSeparatedPathsFromStdin(targetList *[]string) error {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		if trimmedPath := strings.TrimSpace(scanner.Text()); trimmedPath != "" {
+			*targetList = append(*targetList, trimmedPath)
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return fmt.Errorf("failed to read newline-separated paths from stdin: %w", scanErr)
 	}
 	return nil
 }
