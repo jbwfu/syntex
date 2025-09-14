@@ -1,0 +1,62 @@
+project_name: syntex
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  -
+    id: syntex
+    main: ./cmd/syntex
+    binary: syntex
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X 'main.version={{.Version}}'
+      - -X 'main.commit={{.Commit}}'
+      - -X 'main.buildDate={{.Date}}'
+
+archives:
+  -
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format: tar.gz
+    # files:
+    #   - README.md
+    #   - LICENSE
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+release:
+  prerelease: auto
+
+changelog:
+  use: git
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Bug fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Optimize"
+      regexp: '^.*?optimize(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Docs"
+      regexp: ".*docs.*"
+      order: 3
+    - title: "CI"
+      regexp: '(.*build.*)|(^ci(\([[:word:]]+\))??!?:.+$)'
+      order: 4
+    - title: Others
+      order: 999
