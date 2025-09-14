@@ -22,6 +22,7 @@ type Options struct {
 	Targets         []string
 	FromStdin0      bool
 	FromStdinLine   bool
+	ShowVersion     bool
 }
 
 // ParseFlags parses the command-line arguments and populates the Options struct.
@@ -41,6 +42,7 @@ func ParseFlags(args []string, stderr io.Writer) (*Options, error) {
 	fs.BoolVarP(&opts.ToClipboard, "clipboard", "c", false, "Write output to the system clipboard.")
 	fs.BoolVarP(&opts.FromStdin0, "from-stdin-0", "0", false, "Read NUL-separated file paths from stdin (e.g., from find . -print0).")
 	fs.BoolVarP(&opts.FromStdinLine, "from-stdin-line", "l", false, "Read newline-separated file paths from stdin (e.g., from ls -1). NOTE: This mode is NOT safe for filenames containing newlines.")
+	fs.BoolVarP(&opts.ShowVersion, "version", "V", false, "Print version information and exit.")
 
 	fs.Usage = func() {
 		progName := filepath.Base(os.Args[0])
@@ -57,10 +59,12 @@ func ParseFlags(args []string, stderr io.Writer) (*Options, error) {
 		return nil, fmt.Errorf("cannot use both -0/--from-stdin-0 and -l/--from-stdin-line flags simultaneously")
 	}
 
-	opts.Targets = fs.Args()
-	if len(opts.Targets) == 0 && len(opts.IncludePatterns) == 0 && !opts.FromStdin0 && !opts.FromStdinLine {
-		fs.Usage()
-		return nil, fmt.Errorf("no target paths or globs provided, and no stdin input flag (-0/-l) was specified")
+	if !opts.ShowVersion {
+		opts.Targets = fs.Args()
+		if len(opts.Targets) == 0 && len(opts.IncludePatterns) == 0 && !opts.FromStdin0 && !opts.FromStdinLine {
+			fs.Usage()
+			return nil, fmt.Errorf("no target paths or globs provided, and no stdin input flag (-0/-l) was specified")
+		}
 	}
 
 	return opts, nil

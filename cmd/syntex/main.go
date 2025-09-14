@@ -17,6 +17,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
@@ -32,6 +38,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	opts, err := options.ParseFlags(args, stderr)
 	if err != nil {
 		return err
+	}
+
+	if opts.ShowVersion {
+		fmt.Fprintf(stdout, "syntex version: %s\n", version)
+		fmt.Fprintf(stdout, "git commit: %s\n", commit)
+		fmt.Fprintf(stdout, "build date: %s\n", buildDate)
+		return nil
 	}
 
 	var outputWriters []io.Writer
