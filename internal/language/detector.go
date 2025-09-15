@@ -1,65 +1,61 @@
 package language
 
-import "path/filepath"
+import (
+	"strings"
 
-// Detector determines the language identifier for a given filename.
-type Detector struct {
-	languageToExts   map[string][]string
-	specialFilenames map[string]string
-	extToLanguage    map[string]string
-}
+	"github.com/go-enry/go-enry/v2"
+)
+
+// Detector determines the language identifier for a given filename and its content.
+type Detector struct{}
 
 // NewDetector creates and initializes a new Detector.
 func NewDetector() *Detector {
-	d := &Detector{
-		languageToExts: map[string][]string{
-			"go":         {".go"},
-			"elisp":      {".el"},
-			"org":        {".org"},
-			"python":     {".py", ".pyw"},
-			"javascript": {".js", ".mjs", ".cjs"},
-			"java":       {".java"},
-			"c":          {".c", ".h"},
-			"cpp":        {".cpp", ".hpp", ".cc", ".hh"},
-			"bash":       {".sh"},
-			"html":       {".html", ".htm"},
-			"css":        {".css"},
-			"json":       {".json"},
-			"xml":        {".xml"},
-			"markdown":   {".md", ".markdown"},
-		},
-		specialFilenames: map[string]string{
-			"Makefile":    "makefile",
-			"Dockerfile":  "dockerfile",
-			"Jenkinsfile": "groovy",
-			"Vagrantfile": "ruby",
-			"go.mod":      "go-mod",
-			"go.sum":      "go-sum",
-		},
-		extToLanguage: make(map[string]string),
-	}
-
-	for lang, exts := range d.languageToExts {
-		for _, ext := range exts {
-			d.extToLanguage[ext] = lang
-		}
-	}
-	return d
+	return &Detector{}
 }
 
-// GetLanguage determines the language by checking for special filenames first,
-// then extensions, and finally defaulting to "text".
-// TODO: For more robust language detection, consider using github.com/go-enry/go-enry/v2.
-func (d *Detector) GetLanguage(filename string) string {
-	base := filepath.Base(filename)
-	if lang, ok := d.specialFilenames[base]; ok {
-		return lang
+// GetLanguage determines the language using a cascade of strategies for accuracy.
+// It returns a string suitable for use in Markdown or Org-mode code blocks.
+func (d *Detector) GetLanguage(filename string, content []byte) string {
+	lang, ok := enry.GetLanguageByFilename(filename)
+	if ok {
+		return normalizeLanguage(lang)
 	}
 
-	ext := filepath.Ext(base)
-	if lang, ok := d.extToLanguage[ext]; ok {
-		return lang
+	lang, ok = enry.GetLanguageByExtension(filename)
+	if ok {
+		return normalizeLanguage(lang)
+	}
+
+	lang = enry.GetLanguage(filename, content)
+	if lang != "" && lang != "Other" {
+		return normalizeLanguage(lang)
 	}
 
 	return "text"
+}
+
+// normalizeLanguage converts a language name from enry (e.g., "C++", "C#")
+// into a format suitable for code block syntax highlighting (e.g., "cpp", "csharp").
+func normalizeLanguage(lang string) string {
+	group := enry.GetLanguageGroup(lang)
+	if group != "" {
+		lang = group
+	}
+
+	// Handle special cases that are common in code blocks.
+	switch lang {
+	case "C++":
+		return "cpp"
+	case "C#":
+		return "csharp"
+	case "F#":
+		return "fsharp"
+	case "Protocol Buffer":
+		return "protobuf"
+	}
+
+	s := strings.ToLower(lang)
+	s = strings.ReplaceAll(s, " ", "-")
+	return s
 }
