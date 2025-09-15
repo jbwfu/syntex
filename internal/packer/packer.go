@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/jbwfu/syntex/internal/filetype"
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
 )
@@ -133,6 +134,15 @@ func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]stri
 
 	// Apply dotfile/dot-directory ignoring logic.
 	if p.filter.IsDotfileIgnored(path, pattern) {
+		return
+	}
+
+	isBinary, err := filetype.IsBinary(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not check file type for %s, skipping: %v\n", path, err)
+		return
+	}
+	if isBinary {
 		return
 	}
 
