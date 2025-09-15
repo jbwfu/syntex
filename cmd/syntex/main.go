@@ -76,10 +76,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	finalOutputWriter := io.MultiWriter(outputWriters...)
 
 	filterOpts := filter.Options{
-		DisableGitignore: opts.NoGitignore,
+		DisableGitignore: opts.NoIgnore,
 		ExcludePatterns:  opts.ExcludePatterns,
 		IncludePatterns:  opts.IncludePatterns,
-		AllowDotfiles:    opts.IncludeHidden,
+		AllowDotfiles:    opts.Hidden,
 	}
 	filterManager, err := filter.NewManager(filterOpts)
 	if err != nil {
