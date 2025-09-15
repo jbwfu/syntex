@@ -10,19 +10,16 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/jbwfu/syntex/internal/filetype"
 	"github.com/jbwfu/syntex/internal/filter"
 	"github.com/jbwfu/syntex/internal/language"
 )
 
-// PlannedFile holds pre-calculated information and content for a file to be processed.
+// PlannedFile holds pre-calculated information for a file to be processed.
 type PlannedFile struct {
 	// Path is the original path from user input or glob match, preserved for display.
 	Path string
 	// Language is the detected language identifier for syntax highlighting.
 	Language string
-	// Content holds the raw byte content of the file.
-	Content []byte
 }
 
 // Packer handles the logic of discovering, filtering, and planning which files
@@ -49,8 +46,8 @@ func NewPacker(
 	}
 }
 
-// Plan discovers, filters, and reads files based on patterns and targets.
-// It returns a sorted slice of files (with their content) ready for processing.
+// Plan discovers and filters files based on include patterns and target paths.
+// It returns a sorted slice of files that are ready to be processed.
 func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
 	uniqueFiles := make(map[string]string)
 
@@ -68,16 +65,19 @@ func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
 
 	result := make([]PlannedFile, 0, len(uniqueFiles))
 	for absPath, originalPath := range uniqueFiles {
-		content, err := os.ReadFile(absPath)
+		analysisResult, err := p.detector.AnalyzeFile(absPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipping unreadable file %s: %v\n", originalPath, err)
 			continue
 		}
 
+		if analysisResult.IsBinary {
+			continue
+		}
+
 		result = append(result, PlannedFile{
 			Path:     originalPath,
-			Language: p.detector.GetLanguage(originalPath, content),
-			Content:  content,
+			Language: analysisResult.Language,
 		})
 	}
 
@@ -88,11 +88,17 @@ func (p *Packer) Plan(targets []string) ([]PlannedFile, error) {
 	return result, nil
 }
 
-// Execute processes a list of PlannedFile items, formats them, and writes the result.
+// Execute processes a list of PlannedFile items, formats them using the
+// configured formatter, and writes the result to the output writer.
 func (p *Packer) Execute(plan []PlannedFile) error {
 	for _, file := range plan {
-		// Content is now pre-loaded in the plan.
-		formatted, err := p.formatter.Format(file.Path, file.Language, file.Content)
+		content, err := os.ReadFile(file.Path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping unreadable file %s: %v\n", file.Path, err)
+			continue
+		}
+
+		formatted, err := p.formatter.Format(file.Path, file.Language, content)
 		if err != nil {
 			return fmt.Errorf("formatting file %q: %w", file.Path, err)
 		}
@@ -131,15 +137,6 @@ func (p *Packer) addFileToPlan(path, pattern string, uniqueFiles map[string]stri
 	}
 
 	if p.filter.IsDotfileIgnored(path, pattern) {
-		return
-	}
-
-	isBinary, err := filetype.IsBinary(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not check file type for %s, skipping: %v\n", path, err)
-		return
-	}
-	if isBinary {
 		return
 	}
 
